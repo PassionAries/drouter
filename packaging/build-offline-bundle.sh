@@ -4,7 +4,11 @@
 #
 #   bash packaging/build-offline-bundle.sh [版本号] [输出目录]
 #
-# 产物：dist/drouter-<版本>-offline-amd64.tar.gz
+# 产物：dist/drouter-<版本>-offline-<架构>.tar.gz
+#       架构取自 `dpkg --print-architecture`（amd64 / arm64 / armhf …）。
+#       ⚠️ 离线包是**分架构**的：里头几百个 .deb 全是某一 CPU 的二进制，
+#          所以必须在与目标机同架构的机器上构建（或用 chroot/qemu 交叉构建），
+#          不能拿 amd64 打出来的包往 arm64 上装。
 #
 # 为什么要有这个（而不是让用户自己拼 deb + 依赖）：
 #   .deb 的 Depends 只声明依赖，真正把依赖装上去是 apt 的活。目标机没外网时
@@ -14,7 +18,7 @@
 #   拷过去解包、跑一条命令就完事。
 #
 # 包内结构：
-#   drouter-<版本>-offline-amd64/
+#   drouter-<版本>-offline-<架构>/
 #   ├── install.sh                  一条命令装完
 #   ├── README-离线安装.md           给不熟悉的人看的步骤说明
 #   ├── SHA256SUMS                  每个 deb 的校验和
@@ -85,7 +89,11 @@ chmod +x "$STAGE/install.sh"
 cat > "$STAGE/README-离线安装.md" <<EOF
 # Drouter ${VERSION} 离线安装包
 
-**适用场景**：目标机（Debian 13 amd64）**没有外网**，想一次装完。
+**适用场景**：目标机（Debian 13 / ${ARCH}）**没有外网**，想一次装完。
+
+> ⚠️ **架构必须匹配**：这个包里的依赖是按 **${ARCH}** 下载的，
+> 只能装在同架构的机器上（如 arm64 主机要打 arm64 的包）。
+> 想知道本机架构：\`dpkg --print-architecture\`。
 
 ## 三步装完
 
@@ -126,8 +134,8 @@ ls debs/*.deb | wc -l          # 应该有两百多个
 ## 如果装不上
 
 1. **先看硬件够不够**：\`free -m\` / \`df -h /\`。内存 < 1G 或根分区 < 3G 会失败。
-2. **确认系统版本**：\`cat /etc/os-release\`，必须是 Debian 13 (trixie) amd64。
-   别的版本依赖版本对不上。
+2. **确认系统版本与架构**：\`cat /etc/os-release\` 要是 Debian 13 (trixie)，
+   \`dpkg --print-architecture\` 要是 **${ARCH}**。别的版本/架构依赖对不上。
 3. **看具体报错**：\`bash install.sh 2>&1 | tee /tmp/install.log\`，
    然后按 log 里的第一条 \`E:\` 定位。
 
@@ -174,4 +182,7 @@ echo "  大小：$(du -h "$BUNDLE" | cut -f1)"
 echo ""
 echo "  上传到 GitHub Release 时，只传这一个文件即可 ——"
 echo "  目标机解包后跑 install.sh 就能在完全无外网的环境装好。"
+echo ""
+echo "  ⚠️ 这是 $ARCH 架构的包。其他架构请在对应架构的机器上重跑本脚本，"
+echo "     包名里的架构后缀会自动变（别的 CPU 装了这一份会依赖不满足）。"
 echo "======================================================================"

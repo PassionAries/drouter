@@ -4304,6 +4304,10 @@
         'QEMU / KVM 虚拟机': { 'n': 'QEMU / KVM virtual machine' },
         '传统 BIOS': { 'n': 'Legacy BIOS', 'd': 'Legacy BIOS' },
         'UEFI': { 'n': 'UEFI', 'd': 'UEFI' },
+        /* arm64 适配：ARM 板没有 BIOS，走 U-Boot + 设备树启动 */
+        '设备树 (Device Tree)':
+          { 'n': 'Device Tree',
+            'd': 'Device Tree / U-Boot boot. ARM and RISC-V boards have no BIOS: the bootloader hands the kernel a device tree describing the hardware.' },
         '未读取到温度传感器，仅显示进程数':
           { 'd': 'No temperature sensor found; only the process count is shown' },
         '未读取到温度': { 'd': 'No temperature reading' },

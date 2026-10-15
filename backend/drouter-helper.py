@@ -1857,8 +1857,55 @@ def _read_temp():
     return temp_c, temp_src
 
 
+# ---- 设备树（Device Tree）属性：ARM / RISC-V 板子的「硬件名片」-------------
+# 这类机器用 U-Boot + 设备树启动，没有 SMBIOS/DMI，也常常没有 EFI。
+# 属性值是若干条以 \0 结尾的字符串拼在一起，取第一个非空的那条。
+# 两个路径都写：/proc/device-tree 是内核 6.x 的常规挂载点，
+# /sys/firmware/devicetree/base 是 sysfs 侧的路径，个别发行版只有后者。
+DT_MODEL_PATHS = ('/proc/device-tree/model',
+                  '/sys/firmware/devicetree/base/model')
+DT_COMPAT_PATHS = ('/proc/device-tree/compatible',
+                   '/sys/firmware/devicetree/base/compatible')
+
+
+def _dt_read(paths):
+    """读设备树里的一条字符串属性。读不到返回空串，不抛异常。
+
+    ⚠️ 必须按 \0 切开再取第一条：compatible 属性里塞的是一串匹配优先级
+    从高到低的标识（例如 amlogic,s912 后跟 amlogic,meson-gxm），
+    原样返回会把一整串连同结尾的空字符一起塞给前端。
+    """
+    for p in paths:
+        try:
+            with open(p, 'rb') as f:
+                raw = f.read()
+        except Exception:
+            continue
+        for part in raw.split(b'\0'):
+            s = part.decode('utf-8', 'replace').strip()
+            if s:
+                return s
+    return ''
+
+
 def _read_bios():
-    """真实探测固件类型：UEFI / 传统 BIOS，并尽量读出厂商与版本。"""
+    """真实探测固件：UEFI / 传统 BIOS / 设备树，并尽量读出厂商与版本。
+
+    ⚠️ 第三个分支「设备树」是 2026-10-16 做 arm64 适配时才加的。
+    早先只看两件事 —— /sys/firmware/efi 在不在、/sys/class/dmi 下的字段能不能读到。
+    在 x86 上这样够用（UEFI 与传统 BIOS 二分），但 **ARM 机器两个都没有**：
+    它不走 EFI，也从来没有 SMBIOS/DMI。于是这类机器一律落到 else 分支，
+    系统概览显示「传统 BIOS」，厂商 / 版本 / 日期还是空白 —— 面板上这一行是**错的**，
+    ARM 开发板根本没有 BIOS 这个东西。
+
+    实测形态（本次 arm64 适配的验证机，见 docs/arm64 部署说明）：
+        Armbian 26.8.1 trixie（Debian 13.6）/ aarch64 / 内核 6.18.35-ophub
+        Amlogic S912 板 —— 无 /sys/firmware/efi、无 /sys/class/dmi，
+        /proc/device-tree/model 读到板名。
+
+    判据顺序不能换：先 EFI，再设备树，最后才是 BIOS。
+    树莓派 4 这类既能以 EFI 也能以设备树启动的机器，应当优先认 EFI。
+    """
     is_efi = os.path.isdir('/sys/firmware/efi')
     vendor = version = date = ''
     # DMI 信息（部分虚拟机/hypervisor 不暴露，容错处理）
@@ -1883,13 +1930,33 @@ def _read_bios():
                 vendor = f.read().strip()
         except Exception:
             pass
+    # 设备树：ARM / RISC-V 板子的板名与 SoC compatible
+    dt_model = _dt_read(DT_MODEL_PATHS)
+    compat = _dt_read(DT_COMPAT_PATHS)
+    has_dt = bool(dt_model or compat)
+    # 没有 DMI 厂商时，拿设备树的板名顶上 —— 面板上「厂商」这一格为空
+    # 会让用户以为探测坏了，而板名恰恰是这类机器上唯一有意义的标识。
+    if not vendor:
+        vendor = dt_model
+    if is_efi:
+        firmware, fw_type = 'UEFI', 'efi'
+    elif has_dt:
+        firmware, fw_type = '设备树 (Device Tree)', 'dt'
+    else:
+        firmware, fw_type = '传统 BIOS', 'bios'
     return {
-        'firmware': 'UEFI' if is_efi else '传统 BIOS',
+        'firmware': firmware,
+        # ⚠️ 面板展示用 firmware（中文，走前端 bt4 查英文），这里是给程序判断的
+        #    稳定枚举 —— 别拿中文串做分支，加语言就要跟着改代码。
+        'fw_type': fw_type,
         'is_efi': is_efi,
+        'is_dt': has_dt,
         'vendor': vendor,
         'version': version,
         'date': date,
+        'compat': compat,
     }
+
 
 
 def _read_file(path, limit=200):

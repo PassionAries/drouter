@@ -2,9 +2,17 @@
 # =============================================================================
 # 构建 drouter 的 Docker 镜像
 #
-#   bash packaging/build-docker.sh [tag]
+#   bash packaging/build-docker.sh [tag] [arch]
 #
-# 产物：drouter:<tag>
+# 产物：drouter:<tag>            （arch 省略 / 与本机架构相同时）
+#       drouter:<tag>-<arch>     （交叉构建时，标签带架构后缀）
+#
+# arm64 适配（2026-10-16）：Debian 13 的 arm64 机器也能跑 drouter
+# （deb 是 Architecture: all，纯 Python），镜像自然也该能出 arm64 版本：
+#   bash packaging/build-docker.sh 1.0.10 arm64
+# ⚠️ 交叉构建要靠 buildx/qemu 提供目标架构的执行能力，
+#    宿主机没有装 binfmt_misc 会卡在 RUN 那一步；这种机器上请直接跑到 ARM 主机上构建。
+#
 # 注意：Dockerfile 里 COPY 的是相对路径，所以构建上下文必须是项目根目录。
 # =============================================================================
 set -euo pipefail
@@ -14,8 +22,24 @@ HERE="$(cd "$(dirname "$0")/.." && pwd)"
 VF="$HERE/packaging/VERSION"
 [ -f "$VF" ] || { echo "缺少 $VF（版本号唯一真源）"; exit 1; }
 TAG="${1:-$(tr -d ' \t\r\n' < "$VF")}"
+# 目标架构。省略时按本机 dpkg 架构处理 —— 那等于「原生构建」：
+# 不加 --platform，标签也不带后缀，产物与改动前**逐字节一致**。
+DPKG_NATIVE="$(dpkg --print-architecture 2>/dev/null || echo amd64)"
+ARCH="${2:-$DPKG_NATIVE}"
 
 command -v docker >/dev/null 2>&1 || { echo "需要 docker"; exit 1; }
+
+# 交叉构建（目标架构 ≠ 本机架构）才加 --platform 与标签后缀。
+# 原生构建硬塞 --platform 反而会拖慢（docker 可能跳过本地缓存层）。
+if [ "$ARCH" = "$DPKG_NATIVE" ]; then
+  PLATFORM_ARG=()
+  IMGTAG="$TAG"
+  echo "== 目标架构：$ARCH（与本机一致，原生构建）=="
+else
+  PLATFORM_ARG=(--platform "linux/$ARCH")
+  IMGTAG="$TAG-$ARCH"
+  echo "== 目标架构：$ARCH（交叉构建，标签后缀 -$ARCH）=="
+fi
 
 echo "== 1/4 构建前自测（避免把坏代码打进镜像）=="
 python3 - <<'PY'
@@ -30,12 +54,13 @@ raise SystemExit(1 if bad else 0)
 PY
 command -v node >/dev/null 2>&1 && node --check web/app.js && echo "  OK: web/app.js"
 
-echo "== 2/4 构建镜像 drouter:$TAG =="
-docker build -f "$HERE/packaging/docker/Dockerfile" -t "drouter:$TAG" "$HERE"
+echo "== 2/4 构建镜像 drouter:$IMGTAG =="
+docker build "${PLATFORM_ARG[@]}" -f "$HERE/packaging/docker/Dockerfile" \
+  -t "drouter:$IMGTAG" "$HERE"
 
 # 同时打一个带用户名的别名，方便日后直推 Docker Hub / 私有仓库。
 # 两个标签指向同一个 image id，不额外占空间。
-docker tag "drouter:$TAG" "liuzhuohua/drouter:$TAG"
+docker tag "drouter:$IMGTAG" "liuzhuohua/drouter:$IMGTAG"
 
 echo "== 3/4 渲染 Release 附件（docker-compose.yml / DOCKER-GUIDE.md）=="
 # 这两个文件是**模板**，里面写的是 __VERSION__ 占位符，不是具体版本号。
@@ -52,7 +77,7 @@ for f in docker-compose.yml DOCKER-GUIDE.md; do
   #    顺序不能反 —— 先替换的话，标记块里的 __VERSION__ 也会被换掉，
   #    删的时候连同「这是模板」的语义一起留在了附件里。
   sed '/TEMPLATE-NOTE:BEGIN/,/TEMPLATE-NOTE:END/d' "$src" \
-    | sed "s/__VERSION__/$TAG/g" > "$HERE/dist/$f"
+    | sed "s/__VERSION__/$IMGTAG/g" > "$HERE/dist/$f"
   # 渲染完必须一个占位符都不剩 —— 剩下就说明模板里有漏网的写法
   if grep -q '__VERSION__' "$HERE/dist/$f"; then
     echo "✘ $f 渲染后仍含 __VERSION__，模板有问题"; exit 1
@@ -61,7 +86,7 @@ for f in docker-compose.yml DOCKER-GUIDE.md; do
   if grep -q 'TEMPLATE-NOTE' "$HERE/dist/$f"; then
     echo "✘ $f 渲染后仍含 TEMPLATE-NOTE 标记"; exit 1
   fi
-  echo "  dist/$f  （$TAG）"
+  echo "  dist/$f  （$IMGTAG）"
 done
 
 echo "== 4/4 产物 =="
@@ -82,11 +107,11 @@ cat <<RUN
     -v drouter-data:/opt/drouter/data \\
     -v drouter-snapshots:/opt/drouter/snapshots \\
     -v drouter-log:/var/log/drouter \\
-    drouter:$TAG
+    drouter:$IMGTAG
 
 导出成 tar（用于分发）：
-  docker save drouter:$TAG liuzhuohua/drouter:$TAG \\
-    -o dist/drouter-$TAG-docker.tar
+  docker save drouter:$IMGTAG liuzhuohua/drouter:$IMGTAG \\
+    -o dist/drouter-$IMGTAG-docker.tar
 
 说明：
   --network host  让容器直接看到宿主机网卡（路由类功能的前提）

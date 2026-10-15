@@ -87,12 +87,60 @@ DL_SOURCES = [
 OFFICIAL_ASSET_TMPL = DL_SOURCES[0][1]
 ASSET_TMPL = OFFICIAL_ASSET_TMPL     # 向后兼容旧引用
 
+# ---- 本机架构 ------------------------------------------------------------
+# ⚠️ 必须知道本机架构，因为**离线包是分架构发布的**：包里那几百个 .deb 全是
+#    某一个 CPU 的二进制，引用名里带着架构后缀。
+_UNAME2ARCH = {'x86_64': 'amd64', 'amd64': 'amd64', 'i686': 'i386',
+               'i386': 'i386', 'aarch64': 'arm64', 'arm64': 'arm64',
+               'armv7l': 'armhf', 'armv6l': 'armhf', 'riscv64': 'riscv64'}
+
+
+def _deb_arch():
+    """本机 dpkg 架构名（amd64 / arm64 / armhf …）。
+
+    arm64 适配（2026-10-16）加的：离线包的模板原先写死 amd64，
+    于是 arm64 机器上「查看更新内容并升级」会列出并下载一份 x86 离线包，
+    装的时候才炸依赖校验 —— 白白传了几十 MB。现在按本机架构拼名字。
+
+    取不到 dpkg 时（非 Debian 系）退到 uname -m 的映射；映射也对不上就原样返回，
+    这是「猜」，但总比一头栽向明确不匹配的架构强。
+    """
+    try:
+        p = subprocess.run(['dpkg', '--print-architecture'],
+                           capture_output=True, text=True, timeout=10)
+        if p.returncode == 0 and p.stdout.strip():
+            return p.stdout.strip()
+    except Exception:
+        pass
+    machine = ''
+    try:
+        machine = os.uname().machine
+    except Exception:
+        pass
+    return _UNAME2ARCH.get(machine, machine or 'amd64')
+
+
 # 我们关心的附件（顺序即前端展示顺序）
-ASSETS = [
-    ('deb', 'drouter_{ver}_all.deb', 'Deb 安装包（推荐，523 KB）'),
-    ('offline', 'drouter-{ver}-offline-amd64.tar.gz', '离线安装包（87 MB，断网可装）'),
-    ('docker', 'drouter-{ver}-docker.tar', 'Docker 镜像（169 MB）'),
-]
+# ⚠️ 每个条目是**四元组** (key, 文件名模板, 说明, 是否随架构变化)。
+#    第四个字段是 arm64 适配时加的：apply_update 靠它判断要不要先拿
+#    SHA256SUMS 清单核对文件名。改这里的元组长度，asset_list() 的解包
+#    必须同步改 —— 不同步的表现是面板上「更新」页整块渲染不出来。
+# 说明文字里的体积是 1.0.10 的实测值，仅作参考。
+def build_assets(arch=None):
+    """按架构拼出附件清单。传 arch 便于单测覆盖各种 CPU。"""
+    a = arch or _deb_arch()
+    return [
+        ('deb', 'drouter_{ver}_all.deb', 'Deb 安装包（推荐，523 KB）', False),
+        ('offline', 'drouter-{ver}-offline-%s.tar.gz' % a,
+         '离线安装包（%s，87 MB，断网可装）' % a, True),
+        ('docker', 'drouter-{ver}-docker.tar', 'Docker 镜像（169 MB）', False),
+    ]
+
+
+# ⚠️ 保留模块级常量给旧调用方（内容 == 本机架构下的清单）。
+#    它是**导入时**算一次的：同一进程里 dpkg 的架构不会变，
+#    没必要每次 asset_list() 都跑一遍子进程。
+ASSETS = build_assets()
 
 _stop_flag = threading.Event()
 _lock = threading.Lock()
@@ -299,12 +347,16 @@ def _write_state(**kw):
         pass
 
 
-def asset_list(ver):
-    """给定版本，列出官方附件的真实文件名 + 说明。"""
+def asset_list(ver, arch=None):
+    """给定版本，列出官方附件的真实文件名 + 说明。
+
+    arch 缺省时按本机架构拼；传值可用于单测（不看机器）。
+    'arch_specific' 为 True 的条目，文件名里带架构后缀。
+    """
     out = []
-    for key, tmpl, desc in ASSETS:
+    for key, tmpl, desc, arch_specific in (build_assets(arch) if arch else ASSETS):
         out.append({'key': key, 'name': tmpl.format(ver=ver.lstrip('v')),
-                    'desc': desc})
+                    'desc': desc, 'arch_specific': arch_specific})
     return out
 
 
@@ -437,6 +489,18 @@ def apply_update(ver, key, backup=True):
             break
     if not target:
         return {'ok': False, 'msg_cn': '未知的附件类型：%s' % key}
+
+    # arm64 适配（2026-10-16）：带架构后缀的附件（离线包）不是每个版本每个
+    # 架构都发。别等下完 87 MB 才炸 —— 先拿 SHA256SUMS 清单对一下有没有这个名字。
+    # 清单取不到（离线 / 三个源都不通）时不拦：那种情况本来也走不到下载成功。
+    if target.get('arch_specific'):
+        _manifest = _fetch_manifest(ver)
+        if _manifest and target['name'] not in _manifest:
+            return {'ok': False,
+                    'msg_cn': '该版本没有发布本机架构（%s）的离线包：%s。'
+                              'deb 包是 Architecture: all，各 CPU 通用，'
+                              '请改用「Deb 安装包」这一项更新。'
+                              % (_deb_arch(), target['name'])}
 
     # ⚠️ 「检查 running」和「写 running=True」必须在**同一把锁内**。
     #    早先写在锁外，两个快速请求都能通过检查 → 各自起一个 worker →

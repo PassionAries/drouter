@@ -427,7 +427,7 @@ python3 devtools/check-shots.py
 
 | | 要求 |
 |---|---|
-| CPU | 1 核 x86-64 |
+| CPU | 1 核（x86-64 或 arm64，见下方「支持矩阵」） |
 | 内存 | 1 GB |
 | 硬盘 | 8 GB |
 | 网卡 | 1 个（先做 LAN + 管理口） |
@@ -644,7 +644,8 @@ bash packaging/build-docker.sh 1.0.8
 构建顺序上，`build-offline-bundle.sh` 会**自己**先调 `build-deb.sh`
 和 `make-offline-deps.sh`，所以想一步到位只跑它就行。
 
-> **构建环境要求**：Debian 13 (trixie) / amd64。
+> **构建环境要求**：Debian 13 (trixie)；离线包**必须在与目标机同架构的机器上**
+> 构建（`dpkg --print-architecture` 决定包名后缀），交叉打包出来的包装不上。
 > 依赖闭包是在**空 dpkg status** 的临时 apt 根里求解的（而不是用当前机器的
 > 已装状态），否则「开发机上恰好装过」的包会被 apt 判为"已满足"而漏收 ——
 > 到了干净目标机上就变成 `Depends: xxx but it is not installable`。
@@ -722,7 +723,7 @@ bash packaging/build-docker.sh 1.0.8
 | **端口冲突** | 装完**不会**自动启动 `dnsmasq` / `radvd` / `kea`。但如果这些服务**本来就在跑**，请先停掉再让 Drouter 接管 |
 | **PVE 虚拟机** | 需要给 VM 网卡开**混杂模式**，否则桥接 / VLAN 的包会被宿主丢掉 |
 | **系统时间** | 面板和证书校验都依赖正确时间。裸装 Debian 若时间不对，先 `sudo timedatectl set-ntp true` |
-| **离线安装前** | 确认目标机是 **amd64**、剩余磁盘 **≥ 1.5 GB**。离线包里的依赖是按 **Debian 13 (trixie)** 下载的，装到别的版本上可能出现版本不匹配 |
+| **离线安装前** | 确认目标机与离线包**同一架构**（`dpkg --print-architecture`）、剩余磁盘 **≥ 1.5 GB**。离线包里的依赖是按 **Debian 13 (trixie)** 下载的，装到别的版本上可能出现版本不匹配 |
 
 ### 📴 关于离线安装（目标机无外网）
 
@@ -743,7 +744,7 @@ bash packaging/build-docker.sh 1.0.8
 
 | 约束 | 原因 |
 |---|---|
-| **架构必须匹配** | 包名带 `-amd64`，里面是 x86_64 的二进制。arm64 目标机请按文档自行重建 |
+| **架构必须匹配** | 包名带 `-<架构>` 后缀，里面的 deb 是对应 CPU 的二进制。**amd64 的包装不到 arm64 上** —— arm64 机器请在 arm64 机器上重跑 `packaging/build-offline-bundle.sh`，或改用 deb 本体（本机架构见 `dpkg --print-architecture`） |
 | **发行版必须匹配** | 依赖来自 `trixie` 仓库。跨版本（如 bookworm）会出现 `libc6` 版本冲突 |
 | **磁盘 ≥ 1.5 GB** | 236 个 deb 解包 + 安装要占几百 MB；`install.sh` 会在低于 1.5 GB 时告警 |
 | **装完要手动改密码** | 默认 `admin` / `admin123`，离线环境下尤其要第一时间改 |
@@ -786,7 +787,7 @@ bash packaging/build-docker.sh 1.0.8
 | Debian 12 (bookworm) | ⚠️ 可用，但 `docker-compose` 包名不同，nftables 版本较老 |
 | Ubuntu 24.04 | ⚠️ 大体可用，`docker-compose-v2` 是 Ubuntu 的叫法 |
 | Debian 11 及更早 | ❌ 不支持（Python 版本与 nftables 语法不兼容） |
-| 架构 | amd64 已充分验证；arm64 理论可用（`Architecture: all`，依赖需自行确认） |
+| 架构 | amd64 全功能已验证。**arm64 已在一个 Debian 系发行版上实测通过**：Armbian 26.8.1 trixie（Debian 13.6）/ aarch64 / 内核 6.18.35-ophub / Amlogic S912 开发板 —— 构建、依赖自检、配置渲染、系统探测全部通过，详见 [docs/07-arm64-适配说明.md](docs/07-arm64-适配说明.md)。<br>其它 arm64 发行版（树莓派系、Debian 官方 aarch64 镜像等）**未验证**。<br>⚠️ arm64 上请优先用 **deb 本体**（`Architecture: all`，各 CPU 通用）；Release 的离线包与 Docker 镜像仍只有 amd64 版本 |
 
 ---
 

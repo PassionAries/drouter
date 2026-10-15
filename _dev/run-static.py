@@ -32,6 +32,9 @@ EXCL = {
     # 更糟的是中途被打断会留下污染（已经发生过一次）。
     # 只能手动跑：python _dev/t-107-inject-wg.py --batch 0
     't-107-inject-wg',
+    # arm64 适配（2026-10-16）的反向验证，同上：覆盖 backend/drouter-update.py、
+    # backend/drouter-helper.py、web/i18n.js、packaging/*.sh 四处源码。
+    't-arch-inject', 't-update-inject', 'upd-inject',
 }
 
 
