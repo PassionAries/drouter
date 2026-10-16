@@ -1003,6 +1003,48 @@ sudo apt purge  drouter       # 连配置一起删
 
 ## 📝 更新日志
 
+
+### v1.0.11 — arm64（Debian 13）适配
+
+**不改动配置存储格式**（老配置直接可用）。
+
+这一版是为 ARM 开发板做的架构适配。实测机型：
+**Armbian 26.8.1 trixie（Debian 13.6）/ aarch64 / 内核 6.18.35-ophub**（Amlogic S912 板）。
+
+#### 1. 修掉 ARM 板被误报成「传统 BIOS」
+
+`_read_bios()` 原先只看两件事：`/sys/firmware/efi` 在不在、`/sys/class/dmi` 下的字段读不读得到。
+x86 上这样够用（UEFI 与传统 BIOS 二分），但 **ARM 板两个都没有** —— 它走 U-Boot + 设备树启动，
+从来没有 SMBIOS/DMI。于是这类机器一律落到 else 分支，系统概览显示「传统 BIOS」，
+厂商 / 版本 / 日期还全是空白。**ARM 开发板上根本没有 BIOS 这个东西，这一行是错的。**
+
+新增设备树分支，判据顺序 **EFI → 设备树 → BIOS**（顺序不能换：树莓派 4 这类既能以 EFI
+也能以设备树启动的机器，应当优先认 EFI）；`compatible` 属性按 NUL 切开取第一条
+（原样返回会把一整串匹配标识连着空字符一起塞给前端）；没有 DMI 厂商时拿设备树板名兜底。
+
+#### 2. 更新模块不再给 arm64 下发 x86 离线包
+
+离线包是分架构发布的（包里几百个 .deb 全是某一个 CPU 的二进制），但资源名原先写死
+`-offline-amd64`。arm64 机器上点「查看更新内容并升级」会列出并下载一份 x86 离线包，
+**白白传几十 MB，然后在装包阶段炸依赖校验**。改为按 `dpkg --print-architecture` 拼名，
+并对带架构后缀的附件在**下载前**先拿官方 SHA256SUMS 核对存在性 —— 没有就明确报错，
+提示改用各 CPU 通用的 deb 包。
+
+#### 3. 产物开始分架构发布
+
+| 附件 | 适用 |
+|---|---|
+| `drouter_1.0.11_all.deb` | 本体，`Architecture: all`，**各 CPU 通用** |
+| `drouter-1.0.11-offline-amd64.tar.gz` | x86_64 离线包（断网可装） |
+| `drouter-1.0.11-offline-arm64.tar.gz` | aarch64 离线包（断网可装） |
+| `drouter-1.0.11-docker.tar` | amd64 镜像 |
+| `drouter-1.0.11-arm64-docker.tar` | arm64 镜像 |
+
+验证范围、实测数据与已知差异全部写在 `docs/07-arm64-适配说明.md`。
+想在自己的板子上复验，可以跑 `python3 devtools/verify-arm64.py`（只读，不改系统）。
+
+> ⚠️ **只对一个发行版做过实测。** 别的 arm64 Debian 衍生版（Ubuntu / Raspberry Pi OS /
+> 其他 Armbian 板型）未验证，请先按说明文档自检再上生产。
 ### v1.0.10 — 全站中英双语 + 修掉「文字被压成竖排」的排版缺陷
 
 **不改动配置存储格式**（老配置直接可用）。

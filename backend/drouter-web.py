@@ -74,7 +74,7 @@ BUILD_FLAG = '/etc/drouter/BUILD_MODE'
 # 早先版本号在 openapi 里硬编码，于是「页面显示什么版本」和「包管理器认为
 # 是哪个版本」是两条互不相干的线，只能靠人手记着同步 —— 漏一次就是一个
 # 改不掉的 bug（apt 按 control 认版本，文件名是 1.0.9 它就当 1.0.8）。
-VERSION_FALLBACK = '1.0.10'
+VERSION_FALLBACK = '1.0.11'
 _VERSION_READ = [False]
 
 

@@ -170,7 +170,7 @@ def app_version():
             return v
     except Exception:
         pass
-    return '1.0.10'
+    return '1.0.11'
 
 
 def parse_ver(v):
